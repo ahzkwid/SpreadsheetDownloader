@@ -100,10 +100,15 @@ public class SpreadsheetDownloaderEditor : Editor
 
 
 /// <summary>
-/// 2021-11-06 ver (creator : ahzkwid)
+/// 2021-11-10 ver (creator : ahzkwid)
 /// </summary>
 public class SpreadsheetDownloader : MonoBehaviour
 {
+    [System.Serializable]
+    public class IntEvent : UnityEvent<int[]> { }
+    [Header("다운로드 실패를 알림, 실패한 이유들을 Error코드로 반환")]
+    public IntEvent OnDownloadFailEvent;
+
     [System.Serializable]
     public class StringsEvent : UnityEvent<string[]> { }
     [Header("모든 다운로드가 끝났음을 알림,filePath들을 반환")]
@@ -112,7 +117,7 @@ public class SpreadsheetDownloader : MonoBehaviour
 
     [HideInInspector]
     public Spreadsheet[] spreadsheets;
-    public string folderPath= "/Spreadsheets";
+    public string folderPath = "/Spreadsheets";
 
     [System.Serializable]
     public class Spreadsheet
@@ -124,10 +129,17 @@ public class SpreadsheetDownloader : MonoBehaviour
         {
             get
             {
-                return "https://"+$"docs.google.com/spreadsheets/d/{key}/gviz/tq?tqx=out:csv&sheet={sheetName}";
+                return "https://" + $"docs.google.com/spreadsheets/d/{key}/gviz/tq?tqx=out:csv&sheet={sheetName}";
             }
         }
     }
+
+    public enum ErrorCode
+    {
+        NoPermission, WriteFileFail
+    }
+
+
 
     // Start is called before the first frame update
     void Start()
@@ -138,10 +150,6 @@ public class SpreadsheetDownloader : MonoBehaviour
     {
         return $"{Application.persistentDataPath + folderPath}";
     }
-    public string[] GetFilePaths(Spreadsheet[] spreadsheets)
-    {
-        return System.Array.ConvertAll(spreadsheets, x => $"{GetExtractFolderPath()}/{x.sheetName}.csv");
-    }
     IEnumerator[] requests = null;
     public void DownLoadStart()
     {
@@ -149,7 +157,7 @@ public class SpreadsheetDownloader : MonoBehaviour
         {
             return;
         }
-        requests=DownLoadStart(spreadsheets);
+        requests = DownLoadStart(spreadsheets);
     }
     public IEnumerator[] DownLoadStart(Spreadsheet[] spreadsheets)
     {
@@ -166,19 +174,34 @@ public class SpreadsheetDownloader : MonoBehaviour
         StartCoroutine(WaitDownloadSuccess(requests));
         return requests;
     }
+    string[] GetFilePaths(Spreadsheet[] spreadsheets)
+    {
+        return System.Array.ConvertAll(spreadsheets, x => $"{GetExtractFolderPath()}/{x.sheetName}.csv");
+    }
     IEnumerator WaitDownloadSuccess(IEnumerator[] requests)
     {
         yield return new WaitUntil(() => CheckDownloadSuccess(requests));
         yield return new WaitForEndOfFrame();
-        var filePaths=GetFilePaths(spreadsheets);
+
+        var successRequests = System.Array.FindAll(requests, request => request.Current is string);
+        var failRequests = System.Array.FindAll(requests, request => request.Current is ErrorCode);
+
+        var successFilePaths = System.Array.ConvertAll(successRequests, request => (string)request.Current);
+        var failFilePaths = System.Array.ConvertAll(failRequests, request => (int)request.Current);
 
 
-
-        OnDownloadSuccessEvent.Invoke(filePaths);
+        if (failFilePaths.Length > 0)
+        {
+            OnDownloadFailEvent.Invoke(failFilePaths);
+        }
+        if (successFilePaths.Length > 0)
+        {
+            OnDownloadSuccessEvent.Invoke(successFilePaths);
+        }
     }
     bool CheckDownloadSuccess(IEnumerator[] requests)
     {
-        return System.Array.TrueForAll(requests, request => request.Current is string);
+        return System.Array.TrueForAll(requests, request => (request.Current is string) || (request.Current is ErrorCode));
     }
 
 
@@ -201,6 +224,7 @@ public class SpreadsheetDownloader : MonoBehaviour
             if (unityWebRequest.isNetworkError)
             {
                 Debug.LogError(unityWebRequest.error);
+                Debug.LogError("다운로드 실패. 재시도중");
                 yield return new WaitForSeconds(1f);
                 goto DOWNLOAD_RETRY;
             }
@@ -215,13 +239,33 @@ public class SpreadsheetDownloader : MonoBehaviour
                     System.IO.Directory.CreateDirectory(folderPath);
                 }
                 var text = unityWebRequest.downloadHandler.text;
-                if (text.Contains("<head>") || text.Contains("<style>"))
+                if (text.Contains("<!DOCTYPE html>") || text.Contains("<head>") || text.Contains("<style>"))
                 {
-                    Debug.LogError("파일 접근 불가. 재시도중");
-                    yield return new WaitForSeconds(3f);
-                    goto DOWNLOAD_RETRY;
+                    Debug.LogError($"text:{text}");
+                    Debug.LogError("다운로드 권한 없음");
+                    yield return ErrorCode.NoPermission;
+                    yield break;
+                    //yield return new WaitForSeconds(3f);
+                    //goto DOWNLOAD_RETRY;
                 }
-                System.IO.File.WriteAllBytes(filePath, unityWebRequest.downloadHandler.data);
+
+
+                bool writeSuccess = false;
+                try
+                {
+                    System.IO.File.WriteAllBytes(filePath, unityWebRequest.downloadHandler.data);
+                    writeSuccess = true;
+                }
+                catch (System.Exception ex)
+                {
+                    Debug.LogError(ex);
+                    Debug.LogError("파일 접근 불가");
+                }
+                if (writeSuccess == false)
+                {
+                    yield return ErrorCode.WriteFileFail;
+                    yield break;
+                }
             }
         }
         yield return filePath;
@@ -229,6 +273,6 @@ public class SpreadsheetDownloader : MonoBehaviour
     // Update is called once per frame
     void Update()
     {
-        
+
     }
 }
