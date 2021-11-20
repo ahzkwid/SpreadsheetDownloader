@@ -136,7 +136,7 @@ public class SpreadsheetDownloader : MonoBehaviour
 
     public enum ErrorCode
     {
-        NoPermission, WriteFileFail
+        NetworkError, NoPermission, WriteFileFail
     }
 
 
@@ -217,16 +217,15 @@ public class SpreadsheetDownloader : MonoBehaviour
         {
             var unityWebRequest = UnityWebRequest.Get(downloadlink);
 
-            DOWNLOAD_RETRY:;
             var operation = unityWebRequest.SendWebRequest();
             yield return new WaitUntil(() => operation.isDone);
 
             if (unityWebRequest.isNetworkError)
             {
                 Debug.LogError(unityWebRequest.error);
-                Debug.LogError("다운로드 실패. 재시도중");
-                yield return new WaitForSeconds(1f);
-                goto DOWNLOAD_RETRY;
+                Debug.LogError("다운로드 실패. 오프라인인지 확인하세요");
+                yield return ErrorCode.NetworkError;
+                yield break;
             }
             else
             {
